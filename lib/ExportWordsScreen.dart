@@ -92,7 +92,7 @@ class _ExportWordsScreenState extends State<ExportWordsScreen> {
 
     var excel = Excel.createExcel();
     Sheet sheet = excel['Saved Words'];
-    sheet.appendRow(['Từ viết tắt', 'Từ viết đủ', 'Nghĩa', 'Chuyên ngành']);
+    sheet.appendRow(['Từ viết tắt', 'Nghĩa', 'Từ viết đủ', 'Chuyên ngành']);
 
     for (var word in _savedWords) {
       if (_selectedFullForms.isEmpty ||

@@ -51,10 +51,18 @@ dependencies:
   file_saver: ^0.2.14
   open_file: ^3.5.10
   flutter_tts: ^4.2.3
+  csv: ^5.0.0
+#  google_mlkit_text_recognition: ^0.15.0
+#  tesseract_ocr: ^0.5.0
+#  camera: ^0.11.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
+  flutter_launcher_icons: ^0.13.1
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/app_logo.png" # đường dẫn tới ảnh logo của bạn
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your
@@ -76,6 +84,10 @@ flutter:
     - assets/animation.json
     - assets/empty.svg
     - assets/sample_words.xlsx
+    - assets/sample_words2.xlsx
+    - assets/sample_csv.csv
+    - assets/tessdata/
+    - assets/app_logo.png
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg

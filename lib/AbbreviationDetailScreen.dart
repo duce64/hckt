@@ -38,6 +38,7 @@ class _AbbreviationDetailScreenState extends State<AbbreviationDetailScreen> {
     'ja-JP': '日本語 (Tiếng Nhật)',
     'zh-CN': '中文 (Giản thể)',
   };
+  bool isUpdate = false;
   @override
   void initState() {
     super.initState();
@@ -73,6 +74,87 @@ class _AbbreviationDetailScreenState extends State<AbbreviationDetailScreen> {
   // Future<void> _speak(String text) async {
   //   await _flutterTts.speak(text);
   // }
+  void _editWordDialog(Map<String, dynamic> word) {
+    final TextEditingController fullFormController = TextEditingController(
+      text: word['full_form'],
+    );
+    final TextEditingController meaningController = TextEditingController(
+      text: word['meaning'],
+    );
+    final TextEditingController categoryController = TextEditingController(
+      text: word['category'],
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Chỉnh sửa từ'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: fullFormController,
+                  decoration: InputDecoration(labelText: 'Từ đầy đủ'),
+                ),
+                TextField(
+                  controller: meaningController,
+                  decoration: InputDecoration(labelText: 'Nghĩa'),
+                ),
+                TextField(
+                  controller: categoryController,
+                  decoration: InputDecoration(labelText: 'Chuyên ngành'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Huỷ'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final editableWord = Map<String, dynamic>.from(
+                  word,
+                ); // 👈 bản sao có thể chỉnh
+                editableWord['full_form'] = fullFormController.text.trim();
+                editableWord['meaning'] = meaningController.text.trim();
+                editableWord['category'] = categoryController.text.trim();
+
+                await DatabaseHelper().updateWord(
+                  editableWord,
+                ); // 👈 cập nhật vào DB
+
+                setState(() {
+                  final index = widget.words.indexWhere(
+                    (w) => w['id'] == editableWord['id'],
+                  );
+                  if (index != -1) {
+                    widget.words[index] = editableWord;
+                  }
+                  _groupWordsByCategory();
+                });
+                isUpdate = true;
+                // cập nhật lại UI
+                Navigator.pop(context, true); // 👈 Trả về true khi có cập nhật
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Đã cập nhật từ "${editableWord['full_form']}"',
+                    ),
+                  ),
+                );
+              },
+              child: Text('Lưu'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   Widget _buildWordItem(Map<String, dynamic> word) {
     final fullForm = word['full_form'] ?? '';
@@ -103,15 +185,27 @@ class _AbbreviationDetailScreenState extends State<AbbreviationDetailScreen> {
                   tooltip: 'Đọc từ',
                   onPressed: () => _speak(fullForm), // 👈 gọi TTS
                 ),
-                IconButton(
-                  icon: Icon(Icons.bookmark_add, color: Colors.orange),
-                  tooltip: 'Lưu từ này',
-                  onPressed: () async {
-                    await DatabaseHelper().addSavedWord(word);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Đã lưu từ "$fullForm"')),
-                    );
-                  },
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.bookmark_add, color: Colors.orange),
+                      tooltip: 'Lưu từ này',
+                      onPressed: () async {
+                        await DatabaseHelper().addSavedWord(word);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Đã lưu từ "${word['full_form']}"'),
+                          ),
+                        );
+                      },
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.edit, color: Colors.blue),
+                      tooltip: 'Sửa từ này',
+                      onPressed: () => _editWordDialog(word),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -151,7 +245,24 @@ class _AbbreviationDetailScreenState extends State<AbbreviationDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: CustomAppBar(title: 'Chi tiết từ viết tắt'),
+      appBar: AppBar(
+        title: Text(
+          'Chi tiết từ viết tắt',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
+        elevation: 2,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.pop(context, isUpdate);
+          },
+        ),
+        actions: [],
+      ),
+
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(

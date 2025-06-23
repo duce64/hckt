@@ -126,6 +126,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
               },
             ),
           ),
+          SizedBox(height: 32),
+          Center(
+            child: Text(
+              '© Bản quyền thuộc Trung đoàn 64',
+              style: textTheme.bodySmall?.copyWith(color: Colors.grey),
+            ),
+          ),
         ],
       ),
     );

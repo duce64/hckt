@@ -35,6 +35,7 @@ class DatabaseHelper {
       path,
       version: 1,
       onCreate: _createSqfliteDb,
+      readOnly: false,
     );
   }
 
@@ -109,7 +110,10 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>?> getRecentWords() async {
     final db = await sqfliteDb;
-    return await db?.query('recent_words');
+    return await db?.query(
+      'recent_words',
+      orderBy: 'timestamp DESC', // 👈 Sắp xếp giảm dần theo thời gian
+    );
   }
 
   Future<void> addRecentWord(Map<String, dynamic> word) async {
@@ -287,24 +291,17 @@ class DatabaseHelper {
     }
   }
 
-  Future<void> updateWord(
-    int id,
-    String abbreviation,
-    String fullForm,
-    String meaning,
-    String category,
-  ) async {
+  Future<void> updateWord(Map<String, dynamic> word) async {
     final db = await sqfliteDb;
     await db?.update(
-      TABLE_NAME,
+      'dictionary',
       {
-        COLUMN_ABBREVIATION: abbreviation,
-        COLUMN_FULL_FORM: fullForm,
-        COLUMN_MEANING: meaning,
-        COLUMN_CATEGORY: category,
+        'full_form': word['full_form'],
+        'meaning': word['meaning'],
+        'category': word['category'],
       },
-      where: '$COLUMN_ID = ?',
-      whereArgs: [id],
+      where: 'id = ?',
+      whereArgs: [word['id']],
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter_svg/svg.dart';
 import 'package:hckt/DatabaseHelper.dart';
 
 import 'AbbreviationDetailScreen.dart';
+import 'RussianOCRScreen.dart';
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -18,6 +19,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedInitial = '';
   bool _isLoading = true;
   String _alphabetMode = 'latin'; // hoặc 'cyrillic'
+  String _selectedCategory = '';
+  List<String?> _allCategories = [];
+  bool _isFilterVisible = true; // 👈 cho phép ẩn/hiện
 
   @override
   void initState() {
@@ -34,8 +38,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadDictionaryData() async {
     final allWords = await DatabaseHelper().getAllWords();
+    final categories =
+        allWords
+            .map((w) => w['category']?.toString().trim())
+            .where((c) => c != null && c.isNotEmpty)
+            .toSet()
+            .toList();
     setState(() {
       _allWords = allWords;
+      _allCategories = categories;
       _isLoading = false;
       _sortAndFilter();
     });
@@ -50,6 +61,16 @@ class _HomeScreenState extends State<HomeScreen> {
             final abbreviation = (word['abbreviation'] ?? '').toLowerCase();
             return abbreviation.startsWith(_selectedInitial.toLowerCase());
           }).toList();
+    }
+    if (_selectedCategory.isNotEmpty) {
+      filtered =
+          filtered
+              .where(
+                (word) =>
+                    (word['category'] ?? '').toLowerCase() ==
+                    _selectedCategory.toLowerCase(),
+              )
+              .toList();
     }
 
     final query = _searchController.text.trim().toLowerCase();
@@ -111,7 +132,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await DatabaseHelper().addRecentWord(word);
     }
 
-    Navigator.push(
+    final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder:
@@ -121,6 +142,69 @@ class _HomeScreenState extends State<HomeScreen> {
               words: relatedWords,
             ),
       ),
+    );
+
+    // 👇 Nếu màn chi tiết trả về true thì reload dữ liệu
+    if (result == true) {
+      _loadDictionaryData();
+    }
+  }
+
+  Widget _buildCategoryFilter() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Lọc theo chuyên ngành:',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 8),
+        SizedBox(
+          height: 40,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _allCategories.length + 1,
+            separatorBuilder: (_, __) => SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final category = index == 0 ? '' : _allCategories[index - 1];
+              final isSelected = _selectedCategory == category;
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _selectedCategory = category;
+                    _sortAndFilter();
+                  });
+                },
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color:
+                        isSelected
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.grey[300],
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Center(
+                    child: SizedBox(
+                      width: 70, // hoặc tùy chỉnh: 80, 120...
+                      child: Text(
+                        category!.isEmpty ? 'Tất cả' : category,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: isSelected ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -245,16 +329,38 @@ class _HomeScreenState extends State<HomeScreen> {
                 decoration: InputDecoration(
                   hintText: 'Tìm từ chuyên ngành...',
                   prefixIcon: Icon(Icons.search),
-                  suffixIcon:
-                      _searchController.text.isNotEmpty
-                          ? IconButton(
-                            icon: Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              _sortAndFilter();
-                            },
-                          )
-                          : null,
+                  suffixIcon: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_searchController.text.isNotEmpty)
+                        IconButton(
+                          icon: Icon(Icons.clear),
+                          onPressed: () {
+                            _searchController.clear();
+                            _sortAndFilter();
+                          },
+                        ),
+                      IconButton(
+                        icon: Icon(Icons.camera_alt),
+                        tooltip: "Nhận diện tiếng Nga",
+                        onPressed: () async {
+                          // final result = await Navigator.push(
+                          //   context,
+                          //   MaterialPageRoute(
+                          //     builder: (_) => RussianOCRScreen(),
+                          //   ),
+                          // );
+                          // if (result != null &&
+                          //     result is String &&
+                          //     result.trim().isNotEmpty) {
+                          //   _searchController.text = result.trim();
+                          //   _sortAndFilter();
+                          // }
+                        },
+                      ),
+                    ],
+                  ),
+
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
@@ -266,9 +372,43 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton.icon(
+                  icon: Icon(
+                    _isFilterVisible ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                  ),
+                  label: Text(
+                    _isFilterVisible ? 'Ẩn bộ lọc' : 'Hiện bộ lọc',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _isFilterVisible = !_isFilterVisible;
+                    });
+                  },
+                ),
+              ],
+            ),
 
             SizedBox(height: 12),
-            _buildInitialFilter(),
+            AnimatedCrossFade(
+              duration: Duration(milliseconds: 300),
+              crossFadeState:
+                  _isFilterVisible
+                      ? CrossFadeState.showFirst
+                      : CrossFadeState.showSecond,
+              firstChild: Column(
+                children: [
+                  _buildInitialFilter(),
+                  SizedBox(height: 8),
+                  _buildCategoryFilter(), // 👈 nếu bạn có lọc chuyên ngành
+                ],
+              ),
+              secondChild: SizedBox.shrink(),
+            ),
             SizedBox(height: 12),
             Expanded(
               child:
@@ -414,11 +554,28 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                   ),
-                                  subtitle: Text(
-                                    'Có $count nghĩa với viết tắt "$abbr"',
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(color: Colors.grey[600]),
-                                  ),
+                                  subtitle:
+                                      count >= 2
+                                          ? Text(
+                                            'Có $count nghĩa với viết tắt "$abbr"',
+                                            style: Theme.of(
+                                              context,
+                                            ).textTheme.bodySmall?.copyWith(
+                                              color: Colors.grey[600],
+                                            ),
+                                          )
+                                          : Text(
+                                            '${word['meaning']}',
+                                            style: Theme.of(
+                                              context,
+                                            ).textTheme.titleMedium?.copyWith(
+                                              fontWeight: FontWeight.w500,
+                                              color:
+                                                  Theme.of(
+                                                    context,
+                                                  ).colorScheme.primary,
+                                            ),
+                                          ),
                                   trailing: Icon(Icons.chevron_right),
                                 ),
                               ),

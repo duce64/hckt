@@ -11,6 +11,8 @@ import 'package:universal_platform/universal_platform.dart';
 import 'package:file_saver/file_saver.dart';
 import 'dart:io';
 import 'custom_appbar.dart';
+import 'dart:convert';
+import 'package:csv/csv.dart';
 
 class AddWordScreen extends StatefulWidget {
   @override
@@ -24,6 +26,173 @@ class _AddWordScreenState extends State<AddWordScreen> {
   final TextEditingController _categoryController = TextEditingController();
   bool _isImporting = false;
 
+  Future<void> _importFromCsv() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['csv'],
+      withData: true,
+    );
+
+    if (result == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('⚠️ Chưa chọn file CSV.')));
+      return;
+    }
+
+    Uint8List? fileBytes = result.files.single.bytes;
+    if (fileBytes == null && result.files.single.path != null) {
+      fileBytes = await File(result.files.single.path!).readAsBytes();
+    }
+
+    if (fileBytes == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('❌ Không thể đọc file CSV.')));
+      return;
+    }
+
+    setState(() => _isImporting = true);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      String csvString = utf8.decode(fileBytes);
+
+      // Làm sạch toàn bộ dấu ngoặc kép " để tránh lỗi
+      csvString = csvString.replaceAll('"', '');
+
+      final rows = const CsvToListConverter().convert(
+        csvString,
+        eol: '\n',
+        fieldDelimiter: ';',
+      );
+
+      if (rows.isEmpty || rows.length < 2) {
+        throw Exception('❌ File CSV không có dữ liệu.');
+      }
+
+      final dbHelper = DatabaseHelper();
+      final allWords = await dbHelper.getAllWords();
+
+      final existingMap = {
+        for (var word in allWords) word['abbreviation'].toString().trim(): word,
+      };
+
+      int importedCount = 0;
+      bool? applyToAllOverwrite;
+      bool? applyToAllSkip;
+
+      for (int i = 1; i < rows.length; i++) {
+        final row = rows[i];
+
+        try {
+          final abbreviation = row[0]?.toString().trim() ?? '';
+          final meaning = row[1]?.toString().trim() ?? '';
+          final fullForm =
+              row.length > 2 ? row[2]?.toString().trim() ?? '' : '';
+          final category =
+              row.length > 3
+                  ? row[3].toString().replaceAll(',', '').trim()
+                  : '';
+
+          if (abbreviation.isEmpty || meaning.isEmpty) continue;
+
+          if (existingMap.containsKey(abbreviation)) {
+            if (applyToAllSkip == true) continue;
+            if (applyToAllOverwrite == true) {
+              await dbHelper.insertWord({
+                'abbreviation': abbreviation,
+                'meaning': meaning,
+                'full_form': fullForm,
+                'category': category,
+              });
+              importedCount++;
+              continue;
+            }
+
+            final result = await showDialog<String>(
+              context: context,
+              builder:
+                  (context) => AlertDialog(
+                    title: Text('Từ "$abbreviation" đã tồn tại'),
+                    content: Text(
+                      'Nghĩa cũ: "${existingMap[abbreviation]?['meaning']}"\n'
+                      'Nghĩa mới: "$meaning"',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'skip'),
+                        child: Text('Bỏ qua'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'overwrite'),
+                        child: Text('Ghi đè'),
+                      ),
+                      TextButton(
+                        onPressed:
+                            () => Navigator.pop(context, 'overwrite_all'),
+                        child: Text('Ghi đè tất cả'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'skip_all'),
+                        child: Text('Bỏ qua tất cả'),
+                      ),
+                    ],
+                  ),
+            );
+
+            if (result == 'skip') continue;
+            if (result == 'skip_all') {
+              applyToAllSkip = true;
+              continue;
+            }
+
+            await dbHelper.insertWord({
+              'abbreviation': abbreviation,
+              'meaning': meaning,
+              'full_form': fullForm,
+              'category': category,
+            });
+            importedCount++;
+
+            if (result == 'overwrite_all') {
+              applyToAllOverwrite = true;
+            }
+          } else {
+            await dbHelper.insertWord({
+              'abbreviation': abbreviation,
+              'meaning': meaning,
+              'full_form': fullForm,
+              'category': category,
+            });
+            importedCount++;
+          }
+        } catch (e) {
+          print('⚠️ Lỗi dòng ${i + 1}: $row');
+          print('Chi tiết: $e');
+          continue;
+        }
+      }
+
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('✅ Đã import $importedCount từ từ CSV.')),
+      );
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('❌ Lỗi khi đọc file CSV: $e')));
+    } finally {
+      setState(() => _isImporting = false);
+    }
+  }
+
   Future<void> _importFromExcel() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -31,159 +200,152 @@ class _AddWordScreenState extends State<AddWordScreen> {
       withData: true,
     );
 
-    if (result != null) {
-      Uint8List? fileBytes = result.files.single.bytes;
+    if (result == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('⚠️ Chưa chọn file Excel.')));
+      return;
+    }
 
-      if (fileBytes == null && result.files.single.path != null) {
-        fileBytes = await File(result.files.single.path!).readAsBytes();
-      }
+    Uint8List? fileBytes = result.files.single.bytes;
+    if (fileBytes == null && result.files.single.path != null) {
+      fileBytes = await File(result.files.single.path!).readAsBytes();
+    }
 
-      if (fileBytes != null) {
-        setState(() {
-          _isImporting = true;
-        });
+    if (fileBytes == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('❌ Không thể đọc file Excel.')));
+      return;
+    }
 
-        // Hiển thị loading dialog
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => Center(child: CircularProgressIndicator()),
-        );
+    setState(() => _isImporting = true);
 
-        try {
-          var excel = Excel.decodeBytes(fileBytes);
-          final dbHelper = DatabaseHelper();
-          final allWords = await dbHelper.getAllWords();
-          final existingMap = {
-            for (var word in allWords)
-              word['abbreviation'].toString(): word['meaning'].toString(),
-          };
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Center(child: CircularProgressIndicator()),
+    );
 
-          int importedCount = 0;
-          bool? applyToAll;
+    try {
+      final excel = Excel.decodeBytes(fileBytes);
+      final dbHelper = DatabaseHelper();
+      final allWords = await dbHelper.getAllWords();
 
-          for (var table in excel.tables.keys) {
-            for (var row in excel.tables[table]!.rows) {
-              if (row.length >= 2) {
-                var abbreviation = row[0]?.value?.toString().trim() ?? '';
-                var meaning = row[1]?.value?.toString().trim() ?? '';
-                var fullForm =
-                    row.length > 2
-                        ? row[2]?.value?.toString().trim() ?? ''
-                        : '';
-                var category =
-                    row.length > 3
-                        ? row[3]?.value?.toString().trim() ?? ''
-                        : '';
+      final existingMap = {
+        for (var word in allWords) word['abbreviation'].toString().trim(): word,
+      };
 
-                if (abbreviation.isEmpty || meaning.isEmpty) continue;
+      int importedCount = 0;
+      bool? applyToAllOverwrite;
+      bool? applyToAllSkip;
 
-                if (existingMap.containsKey(abbreviation)) {
-                  if (applyToAll == null) {
-                    final result = await showDialog<String>(
-                      context: context,
-                      builder:
-                          (context) => AlertDialog(
-                            title: Text('Từ "$abbreviation" đã tồn tại'),
-                            content: Text(
-                              'Nghĩa cũ: "${existingMap[abbreviation]}"\nNghĩa mới: "$meaning"',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, 'skip'),
-                                child: Text('Bỏ qua'),
-                              ),
-                              TextButton(
-                                onPressed:
-                                    () => Navigator.pop(context, 'overwrite'),
-                                child: Text('Ghi đè'),
-                              ),
-                              TextButton(
-                                onPressed:
-                                    () =>
-                                        Navigator.pop(context, 'overwrite_all'),
-                                child: Text('Ghi đè tất cả'),
-                              ),
-                              TextButton(
-                                onPressed:
-                                    () => Navigator.pop(context, 'skip_all'),
-                                child: Text('Bỏ qua tất cả'),
-                              ),
-                            ],
-                          ),
-                    );
+      for (var table in excel.tables.keys) {
+        for (var row in excel.tables[table]!.rows) {
+          if (row.length < 2 || row[0] == null || row[1] == null) continue;
 
-                    if (result == 'overwrite') {
-                      await dbHelper.insertWord({
-                        DatabaseHelper.COLUMN_ABBREVIATION: abbreviation,
-                        DatabaseHelper.COLUMN_MEANING: meaning,
-                        DatabaseHelper.COLUMN_FULL_FORM: fullForm,
-                        DatabaseHelper.COLUMN_CATEGORY: category,
-                      });
-                      importedCount++;
-                    } else if (result == 'overwrite_all') {
-                      applyToAll = true;
-                      await dbHelper.insertWord({
-                        DatabaseHelper.COLUMN_ABBREVIATION: abbreviation,
-                        DatabaseHelper.COLUMN_MEANING: meaning,
-                        DatabaseHelper.COLUMN_FULL_FORM: fullForm,
-                        DatabaseHelper.COLUMN_CATEGORY: category,
-                      });
-                      importedCount++;
-                    } else if (result == 'skip_all') {
-                      applyToAll = false;
-                    }
-                  } else if (applyToAll == true) {
-                    await dbHelper.insertWord({
-                      DatabaseHelper.COLUMN_ABBREVIATION: abbreviation,
-                      DatabaseHelper.COLUMN_MEANING: meaning,
-                      DatabaseHelper.COLUMN_FULL_FORM: fullForm,
-                      DatabaseHelper.COLUMN_CATEGORY: category,
-                    });
-                    importedCount++;
-                  }
-                } else {
-                  await dbHelper.insertWord({
-                    DatabaseHelper.COLUMN_ABBREVIATION: abbreviation,
-                    DatabaseHelper.COLUMN_MEANING: meaning,
-                    DatabaseHelper.COLUMN_FULL_FORM: fullForm,
-                    DatabaseHelper.COLUMN_CATEGORY: category,
-                  });
-                  importedCount++;
-                }
-              }
+          var abbreviation =
+              row.length > 0 ? row[0]?.value?.toString().trim() ?? '' : '';
+          var meaning =
+              row.length > 1 ? row[1]?.value?.toString().trim() ?? '' : '';
+          var fullForm =
+              row.length > 2 ? row[2]?.value?.toString().trim() ?? '' : '';
+          var category =
+              row.length > 3 ? row[3]?.value?.toString().trim() ?? '' : '';
+
+          if (abbreviation.isEmpty || meaning.isEmpty) continue;
+
+          if (existingMap.containsKey(abbreviation)) {
+            if (applyToAllSkip == true) continue;
+            if (applyToAllOverwrite == true) {
+              await dbHelper.insertWord({
+                'abbreviation': abbreviation,
+                'meaning': meaning,
+                'full_form': fullForm,
+                'category': category,
+              });
+              importedCount++;
+              continue;
             }
+
+            // hỏi người dùng
+            final result = await showDialog<String>(
+              context: context,
+              builder:
+                  (context) => AlertDialog(
+                    title: Text('Từ "$abbreviation" đã tồn tại'),
+                    content: Text(
+                      'Nghĩa cũ: "${existingMap[abbreviation]?['meaning']}"\n'
+                      'Nghĩa mới: "$meaning"',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'skip'),
+                        child: Text('Bỏ qua'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'overwrite'),
+                        child: Text('Ghi đè'),
+                      ),
+                      TextButton(
+                        onPressed:
+                            () => Navigator.pop(context, 'overwrite_all'),
+                        child: Text('Ghi đè tất cả'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, 'skip_all'),
+                        child: Text('Bỏ qua tất cả'),
+                      ),
+                    ],
+                  ),
+            );
+
+            if (result == 'skip') {
+              continue;
+            } else if (result == 'overwrite') {
+              await dbHelper.insertWord({
+                'abbreviation': abbreviation,
+                'meaning': meaning,
+                'full_form': fullForm,
+                'category': category,
+              });
+              importedCount++;
+            } else if (result == 'overwrite_all') {
+              applyToAllOverwrite = true;
+              await dbHelper.insertWord({
+                'abbreviation': abbreviation,
+                'meaning': meaning,
+                'full_form': fullForm,
+                'category': category,
+              });
+              importedCount++;
+            } else if (result == 'skip_all') {
+              applyToAllSkip = true;
+              continue;
+            }
+          } else {
+            await dbHelper.insertWord({
+              'abbreviation': abbreviation,
+              'meaning': meaning,
+              'full_form': fullForm,
+              'category': category,
+            });
+            importedCount++;
           }
-
-          Navigator.of(context).pop(); // Close loading dialog
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ Đã import $importedCount từ từ Excel.'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        } catch (e) {
-          Navigator.of(context).pop(); // Close loading dialog
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('❌ Lỗi khi đọc file Excel.'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        } finally {
-          setState(() {
-            _isImporting = false;
-          });
         }
       }
-    } else {
+
+      Navigator.of(context).pop(); // đóng loading
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('⚠️ Chưa chọn file Excel.'),
-          behavior: SnackBarBehavior.floating,
-        ),
+        SnackBar(content: Text('✅ Đã import $importedCount từ từ Excel.')),
       );
+    } catch (e) {
+      Navigator.of(context).pop(); // đóng loading
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('❌ Lỗi khi đọc file Excel.')));
+    } finally {
+      setState(() => _isImporting = false);
     }
   }
 
@@ -226,20 +388,20 @@ class _AddWordScreenState extends State<AddWordScreen> {
   Future<void> _downloadSampleExcel() async {
     try {
       // 1. Đọc file từ assets
-      final byteData = await rootBundle.load('assets/sample_words.xlsx');
+      final byteData = await rootBundle.load('assets/sample_csv.csv');
 
       // 2. Lấy thư mục tạm
       final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/sample_words.xlsx');
+      final tempFile = File('${tempDir.path}/sample_csv.csv');
 
       // 3. Ghi file
       await tempFile.writeAsBytes(byteData.buffer.asUint8List());
 
       // 4. Lưu file về máy người dùng (Android/iOS/Web)
       final saved = await FileSaver.instance.saveFile(
-        name: "sample_words",
+        name: "sample_words2",
         bytes: byteData.buffer.asUint8List(),
-        ext: "xlsx",
+        ext: "csv",
         // mimeType: MimeType(
         //   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', name: '',
         // ),
@@ -276,41 +438,76 @@ class _AddWordScreenState extends State<AddWordScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '📄 Cấu trúc file Excel cần có:',
-                    style: textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+                  Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceVariant.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    '• Cột A: Từ viết tắt (bắt buộc)',
-                    style: textTheme.bodyMedium,
-                  ),
-                  Text(
-                    '• Cột B: Nghĩa rõ (bắt buộc)',
-                    style: textTheme.bodyMedium,
-                  ),
-                  Text(
-                    '• Cột C: Từ viết đủ (tuỳ chọn)',
-                    style: textTheme.bodyMedium,
-                  ),
-                  Text(
-                    '• Cột D: Loại chuyên ngành (tuỳ chọn)',
-                    style: textTheme.bodyMedium,
-                  ),
-                  SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: _downloadSampleExcel,
-                      icon: Icon(Icons.download, color: colorScheme.primary),
-                      label: Text(
-                        'Tải file mẫu',
-                        style: textTheme.labelLarge?.copyWith(
-                          color: colorScheme.primary,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '📄 Cấu trúc file cần có (Excel hoặc CSV):',
+                          style: textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
+                        SizedBox(height: 8),
+                        Text(
+                          '• Cột 1: Từ viết tắt (bắt buộc)',
+                          style: textTheme.bodyMedium,
+                        ),
+                        Text(
+                          '• Cột 2: Nghĩa rõ (bắt buộc)',
+                          style: textTheme.bodyMedium,
+                        ),
+                        Text(
+                          '• Cột 3: Từ viết đủ (tuỳ chọn)',
+                          style: textTheme.bodyMedium,
+                        ),
+                        Text(
+                          '• Cột 4: Loại chuyên ngành (tuỳ chọn)',
+                          style: textTheme.bodyMedium,
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          '📌 Lưu ý đối với file CSV:',
+                          style: textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: colorScheme.primary,
+                          ),
+                        ),
+                        Text(
+                          '• Dùng dấu `;` để phân cách các cột.',
+                          style: textTheme.bodyMedium,
+                        ),
+                        Text(
+                          '• Nếu dữ liệu có dấu `;`, hãy đặt toàn bộ ô đó trong dấu ngoặc kép "..."',
+                          style: textTheme.bodyMedium,
+                        ),
+                        Text(
+                          '• Mã hóa UTF-8 để tránh lỗi ký tự.',
+                          style: textTheme.bodyMedium,
+                        ),
+                        SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: _downloadSampleExcel,
+                            icon: Icon(
+                              Icons.download,
+                              color: colorScheme.primary,
+                            ),
+                            label: Text(
+                              'Tải file mẫu',
+                              style: textTheme.labelLarge?.copyWith(
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -320,9 +517,9 @@ class _AddWordScreenState extends State<AddWordScreen> {
             SizedBox(height: 24),
 
             ElevatedButton.icon(
-              onPressed: _importFromExcel,
+              onPressed: _importFromCsv,
               icon: Icon(Icons.upload_file),
-              label: Text('Chọn file Excel'),
+              label: Text('Chọn file CSV'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: colorScheme.primary,
                 foregroundColor: colorScheme.onPrimary,
@@ -340,7 +537,9 @@ class _AddWordScreenState extends State<AddWordScreen> {
             SizedBox(height: 12),
             _buildTextField(_fullFormController, 'Từ viết đủ', context),
             SizedBox(height: 12),
-            _buildTextField(_categoryController, 'Loại chuyên ngành', context),
+            _buildCategoryInputField(context),
+
+            // _buildTextField(_categoryController, 'Loại chuyên ngành', context),
             SizedBox(height: 20),
 
             SizedBox(
@@ -363,6 +562,78 @@ class _AddWordScreenState extends State<AddWordScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildCategoryInputField(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _categoryController,
+            decoration: InputDecoration(
+              labelText: 'Loại chuyên ngành',
+              border: OutlineInputBorder(),
+            ),
+            style: theme.textTheme.bodyLarge,
+          ),
+        ),
+        SizedBox(width: 8),
+        ElevatedButton(
+          onPressed: _selectCategoryFromList,
+          style: ElevatedButton.styleFrom(
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 18),
+          ),
+          child: Icon(Icons.list_alt),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _selectCategoryFromList() async {
+    final categories = await _getAllCategories();
+    if (categories.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('⚠️ Chưa có chuyên ngành nào trong dữ liệu.')),
+      );
+      return;
+    }
+
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) {
+        return ListView.separated(
+          itemCount: categories.length,
+          separatorBuilder: (_, __) => Divider(height: 1),
+          itemBuilder: (context, index) {
+            final category = categories[index];
+            return ListTile(
+              title: Text(category),
+              onTap: () => Navigator.pop(context, category),
+            );
+          },
+        );
+      },
+    );
+
+    if (selected != null) {
+      setState(() {
+        _categoryController.text = selected;
+      });
+    }
+  }
+
+  Future<List<String>> _getAllCategories() async {
+    final allWords = await DatabaseHelper().getAllWords();
+    final categories = <String>{};
+    for (var word in allWords) {
+      final cat = word['category']?.toString().trim();
+      if (cat != null && cat.isNotEmpty) {
+        categories.add(cat);
+      }
+    }
+    return categories.toList()..sort();
   }
 
   Widget _buildTextField(
